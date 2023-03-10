@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2021 XiaoMi, Inc.
  */
 
@@ -525,10 +525,14 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
 	chg->sw_jeita_enabled = of_property_read_bool(node,
 				"qcom,sw-jeita-enable");
 
+	chg->jeita_arb_enable = of_property_read_bool(node,
+				"qcom,jeita-arb-enable");
+
 	chg->pd_not_supported = chg->pd_not_supported ||
 			of_property_read_bool(node, "qcom,usb-pd-disable");
 
-	chg->lpd_disabled = of_property_read_bool(node, "qcom,lpd-disable");
+	chg->lpd_disabled = chg->lpd_disabled ||
+			of_property_read_bool(node, "qcom,lpd-disable");
 
 	rc = of_property_read_u32(node, "qcom,wd-bark-time-secs",
 					&chip->dt.wd_bark_time);
@@ -851,7 +855,44 @@ static int smb5_parse_dt_misc(struct smb5 *chip, struct device_node *node)
        }
 
        chg->support_ffc = of_property_read_bool(node, "mi,support-ffc");
+	of_property_read_u32(node, "qcom,hvdcp2-12v-max-icl-ua",
+					&chg->chg_param.hvdcp2_12v_max_icl_ua);
+	if (chg->chg_param.hvdcp2_12v_max_icl_ua <= 0)
+		chg->chg_param.hvdcp2_12v_max_icl_ua =
+			chg->chg_param.hvdcp2_max_icl_ua;
 
+       chg->support_conn_therm = of_property_read_bool(node,
+                               "qcom,support-conn-therm");
+
+       if (chg->support_conn_therm) {
+               chg->vbus_disable_gpio = of_get_named_gpio_flags(node,
+                               "vbus-disable-gpio", 0, &flags);
+               if (chg->vbus_disable_gpio < 0) {
+                       pr_err("failed to vbus disable gpio flags\n");
+               }
+       }
+
+       chg->qc_class_ab = of_property_read_bool(node,
+                               "qcom,distinguish-qc-class-ab");
+
+       chg->six_pin_step_charge_enable = of_property_read_bool(node,
+                               "mi,six-pin-step-chg");
+
+       if (chg->six_pin_step_charge_enable) {
+               rc = smb5_charge_step_charge_init(chg, node);
+               if (!rc) {
+                       for (i = 0; i < MAX_STEP_ENTRIES; i++)
+                               pr_err("six-pin-step-chg-cfg: %duV, %duA\n",
+                                               chg->six_pin_step_cfg[i].vfloat_step_uv,
+                                               chg->six_pin_step_cfg[i].fcc_step_ua);
+               }
+               rc = of_property_read_u32(node, "mi,six-pin-soc-th", &chg->step_soc_threshold);
+               if (rc < 0)
+                       pr_err("read six-pin-soc-threshold failed\n");
+       }
+
+       chg->support_ffc = of_property_read_bool(node, "mi,support-ffc");
+	   
 	/* Used only in Adapter CV mode of operation */
 	of_property_read_u32(node, "qcom,qc4-max-icl-ua",
 					&chg->chg_param.qc4_max_icl_ua);
@@ -2468,16 +2509,13 @@ static int smb5_configure_typec(struct smb_charger *chg)
 	}
 
 	/*
-	 * Across reboot, standard typeC cables get detected as legacy cables
-	 * due to VBUS attachment prior to CC attach/dettach. To handle this,
-	 * "early_usb_attach" flag is used, which assumes that across reboot,
-	 * the cable connected can be standard typeC. However, its jurisdiction
-	 * is limited to PD capable designs only. Hence, for non-PD type designs
-	 * reset legacy cable detection by disabling/enabling typeC mode.
+	 * Across reboot, standard typeC cables get detected as legacy
+	 * cables due to VBUS attachment prior to CC attach/detach. Reset
+	 * the legacy detection logic by enabling/disabling the typeC mode.
 	 */
-	if (chg->pd_not_supported && (val & TYPEC_LEGACY_CABLE_STATUS_BIT)) {
+	if (val & TYPEC_LEGACY_CABLE_STATUS_BIT) {
 		pval.intval = POWER_SUPPLY_TYPEC_PR_NONE;
-		smblib_set_prop_typec_power_role(chg, &pval);
+		rc = smblib_set_prop_typec_power_role(chg, &pval);
 		if (rc < 0) {
 			dev_err(chg->dev, "Couldn't disable TYPEC rc=%d\n", rc);
 			return rc;
@@ -2487,7 +2525,7 @@ static int smb5_configure_typec(struct smb_charger *chg)
 		msleep(50);
 
 		pval.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
-		smblib_set_prop_typec_power_role(chg, &pval);
+		rc = smblib_set_prop_typec_power_role(chg, &pval);
 		if (rc < 0) {
 			dev_err(chg->dev, "Couldn't enable TYPEC rc=%d\n", rc);
 			return rc;
