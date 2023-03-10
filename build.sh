@@ -30,7 +30,7 @@ TARGET_KERNEL_NAME=Kernel;
 TARGET_KERNEL_MOD_VERSION=$(make kernelversion)-$LOCAL_VERSION_NUMBER;
 
 DEFCONFIG_PATH=arch/arm64/configs
-DEFCONFIG_NAME=gauguin_defconfig;
+DEFCONFIG_NAME=vendor/gauguin_user_defconfig;
 
 START_SEC=$(date +%s);
 CURRENT_TIME=$(date '+%Z-%Y-%m-%d-%H%M');
